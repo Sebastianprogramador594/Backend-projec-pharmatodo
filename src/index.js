@@ -14,10 +14,6 @@ app.get("/", (req, res) => {
 
 const medicamentosRoutes = require("../routes/medicamentos.routes");
 
-app.get("/", (req, res) => {
-    res.send("API de PharmaTodo funcionando correctamente");
-});
-
 app.use("/api", medicamentosRoutes);
 
 const PORT = process.env.PORT || 3000;
