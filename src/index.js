@@ -10,8 +10,14 @@ app.use(express.json());
 
 const medicamentosRoutes = require("../routes/medicamentos.routes");
 
-app.use("/", medicamentosRoutes);
+app.get("/", (req, res) => {
+    res.send("API de PharmaTodo funcionando correctamente");
+});
 
-app.listen(3000, () => {
-    console.log("Servidor corriendo en puerto 3000");
+app.use("/api", medicamentosRoutes);
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`Servidor corriendo en el puerto ${PORT}`);
 });
