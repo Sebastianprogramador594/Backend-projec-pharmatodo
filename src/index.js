@@ -8,6 +8,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get("/", (req, res) => {
+    res.send("🚀 API de PharmaTodo desplegada correctamente en Railway");
+});
+
 const medicamentosRoutes = require("../routes/medicamentos.routes");
 
 app.get("/", (req, res) => {
