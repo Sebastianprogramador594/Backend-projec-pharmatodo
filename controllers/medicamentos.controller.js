@@ -6,7 +6,17 @@ const consultarMedicamentos = (req, res) => {
         "SELECT * FROM medicamentos",
         (err, result) => {
             if (err) {
-                return res.status(500).json(err);
+
+                console.error("❌ Error en la consulta:");
+                console.error(err);
+
+                return res.status(500).json({
+                    code: err.code,
+                    errno: err.errno,
+                    sqlMessage: err.sqlMessage,
+                    sqlState: err.sqlState,
+                    message: err.message
+                });
             }
 
             res.json(result);
