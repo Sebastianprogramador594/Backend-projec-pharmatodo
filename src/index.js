@@ -13,8 +13,18 @@ app.get("/", (req, res) => {
 });
 
 const medicamentosRoutes = require("../routes/medicamentos.routes");
+const authRoutes = require("../routes/auth.routes");
+const dashboardRoutes = require("../routes/dashboard.routes");
+const inventariosRoutes = require("../routes/inventarios.routes");
+const ventasRoutes = require("../routes/ventas.routes");
+const proveedoresRoutes = require("../routes/proveedores.routes");
 
 app.use("/api", medicamentosRoutes);
+app.use("/api", authRoutes);
+app.use("/api", dashboardRoutes);
+app.use("/api", inventariosRoutes);
+app.use("/api", ventasRoutes);
+app.use("/api", proveedoresRoutes);
 
 const PORT = process.env.PORT || 3000;
 
