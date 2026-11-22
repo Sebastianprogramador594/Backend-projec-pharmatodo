@@ -1,7 +1,7 @@
 const connection = require("../config/db");
 
+// CONSULTAR INVENTARIOS
 const consultarInventarios = (req, res) => {
-
     const sql = `
         SELECT
             i.ID_INVENTARIO,
@@ -20,28 +20,20 @@ const consultarInventarios = (req, res) => {
     `;
 
     connection.query(sql, (err, result) => {
-
         if (err) {
-
-            console.error("Error al consultar inventarios:");
-            console.error(err);
-
+            console.error("Error al consultar inventarios:", err);
             return res.status(500).json({
-                code: err.code,
-                errno: err.errno,
-                sqlMessage: err.sqlMessage,
-                sqlState: err.sqlState,
-                message: err.message
+                mensaje: "Error al consultar los registros de inventario",
+                error: err.message
             });
         }
 
         res.json(result);
-
     });
 };
 
+// REGISTRAR INVENTARIO
 const registrarInventario = (req, res) => {
-
     const {
         MEDICAMENTO_ID,
         CANTIDAD_TOTAL,
@@ -53,9 +45,14 @@ const registrarInventario = (req, res) => {
         CANTIDAD_TOTAL === undefined ||
         !UBICACION
     ) {
-
         return res.status(400).json({
-            mensaje: "Todos los campos son obligatorios"
+            mensaje: "El medicamento, la cantidad total y la ubicación son obligatorios"
+        });
+    }
+
+    if (Number(CANTIDAD_TOTAL) < 0) {
+        return res.status(400).json({
+            mensaje: "La cantidad no puede ser un valor negativo"
         });
     }
 
@@ -68,23 +65,16 @@ const registrarInventario = (req, res) => {
     connection.query(
         sql,
         [
-            MEDICAMENTO_ID,
-            CANTIDAD_TOTAL,
-            UBICACION
+            Number(MEDICAMENTO_ID),
+            Number(CANTIDAD_TOTAL),
+            UBICACION.trim()
         ],
         (err, result) => {
-
             if (err) {
-
-                console.error("Error al registrar inventario:");
-                console.error(err);
-
+                console.error("Error al registrar inventario:", err);
                 return res.status(500).json({
-                    code: err.code,
-                    errno: err.errno,
-                    sqlMessage: err.sqlMessage,
-                    sqlState: err.sqlState,
-                    message: err.message
+                    mensaje: "Error al registrar en inventario",
+                    error: err.message
                 });
             }
 
@@ -92,13 +82,12 @@ const registrarInventario = (req, res) => {
                 mensaje: "Registro de inventario creado correctamente",
                 ID_INVENTARIO: result.insertId
             });
-
         }
     );
 };
 
+// ACTUALIZAR INVENTARIO
 const actualizarInventario = (req, res) => {
-
     const id = req.params.id;
 
     const {
@@ -112,9 +101,14 @@ const actualizarInventario = (req, res) => {
         CANTIDAD_TOTAL === undefined ||
         !UBICACION
     ) {
-
         return res.status(400).json({
-            mensaje: "Todos los campos son obligatorios"
+            mensaje: "El medicamento, la cantidad total y la ubicación son obligatorios"
+        });
+    }
+
+    if (Number(CANTIDAD_TOTAL) < 0) {
+        return res.status(400).json({
+            mensaje: "La cantidad no puede ser un valor negativo"
         });
     }
 
@@ -130,76 +124,58 @@ const actualizarInventario = (req, res) => {
     connection.query(
         sql,
         [
-            MEDICAMENTO_ID,
-            CANTIDAD_TOTAL,
-            UBICACION,
+            Number(MEDICAMENTO_ID),
+            Number(CANTIDAD_TOTAL),
+            UBICACION.trim(),
             id
         ],
         (err, result) => {
-
             if (err) {
-
-                console.error("Error al actualizar inventario:");
-                console.error(err);
-
+                console.error("Error al actualizar inventario:", err);
                 return res.status(500).json({
-                    code: err.code,
-                    errno: err.errno,
-                    sqlMessage: err.sqlMessage,
-                    sqlState: err.sqlState,
-                    message: err.message
+                    mensaje: "Error al actualizar el registro de inventario",
+                    error: err.message
                 });
             }
 
             if (result.affectedRows === 0) {
-
                 return res.status(404).json({
-                    mensaje: "No se encontró el registro de inventario"
+                    mensaje: "No se encontró el registro de inventario especificado"
                 });
             }
 
             res.json({
                 mensaje: "Inventario actualizado correctamente"
             });
-
         }
     );
 };
 
+// ELIMINAR INVENTARIO
 const eliminarInventario = (req, res) => {
-
     const id = req.params.id;
 
     connection.query(
         "DELETE FROM inventarios WHERE ID_INVENTARIO = ?",
         [id],
         (err, result) => {
-
             if (err) {
-
-                console.error("Error al eliminar inventario:");
-                console.error(err);
-
+                console.error("Error al eliminar inventario:", err);
                 return res.status(500).json({
-                    code: err.code,
-                    errno: err.errno,
-                    sqlMessage: err.sqlMessage,
-                    sqlState: err.sqlState,
-                    message: err.message
+                    mensaje: "Error al eliminar el registro de inventario",
+                    error: err.message
                 });
             }
 
             if (result.affectedRows === 0) {
-
                 return res.status(404).json({
-                    mensaje: "No se encontró el registro de inventario"
+                    mensaje: "No se encontró el registro de inventario especificado"
                 });
             }
 
             res.json({
                 mensaje: "Registro de inventario eliminado correctamente"
             });
-
         }
     );
 };

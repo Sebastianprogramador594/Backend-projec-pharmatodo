@@ -9,35 +9,34 @@ const registrarVenta = (req, res) => {
 
     if (!CLIENTE_NOMBRE || !METODO_PAGO || !Array.isArray(productos) || productos.length === 0) {
         return res.status(400).json({
-            mensaje: "Los datos de la venta están incompletos"
+            mensaje: "Los datos de la venta están incompletos. Debe indicar cliente, método de pago y al menos un producto."
         });
     }
 
     connection.beginTransaction((err) => {
         if (err) {
             return res.status(500).json({
-                mensaje: "No se pudo iniciar la transacción",
+                mensaje: "No se pudo iniciar la transacción de venta",
                 error: err.message
             });
         }
 
         let total = 0;
-        let detallesProcesados = 0;
         const detalles = [];
 
         const procesarProducto = (indice) => {
             if (indice >= productos.length) {
+                // Insertar encabezado de la venta
                 connection.query(
                     `INSERT INTO ventas
                     (TOTAL, METODO_PAGO, CLIENTE_NOMBRE)
                     VALUES (?, ?, ?)`,
-                    [total, METODO_PAGO, CLIENTE_NOMBRE],
+                    [total, METODO_PAGO.trim(), CLIENTE_NOMBRE.trim()],
                     (err, resultadoVenta) => {
-
                         if (err) {
                             return connection.rollback(() => {
                                 res.status(500).json({
-                                    mensaje: "No se pudo registrar la venta",
+                                    mensaje: "No se pudo registrar la cabecera de la venta",
                                     error: err.message
                                 });
                             });
@@ -51,7 +50,7 @@ const registrarVenta = (req, res) => {
                                     if (err) {
                                         return connection.rollback(() => {
                                             res.status(500).json({
-                                                mensaje: "No se pudo confirmar la venta",
+                                                mensaje: "No se pudo confirmar la transacción de venta",
                                                 error: err.message
                                             });
                                         });
@@ -80,14 +79,15 @@ const registrarVenta = (req, res) => {
                                 ],
                                 (err) => {
                                     if (err) {
-                                    return connection.rollback(() => {
-                                        res.status(500).json({
-                                            mensaje: "No se pudo registrar el detalle de la venta",
-                                            error: err.message
+                                        return connection.rollback(() => {
+                                            res.status(500).json({
+                                                mensaje: "No se pudo registrar el detalle de la venta",
+                                                error: err.message
+                                            });
                                         });
-                                    });
-                                }
+                                    }
 
+                                    // Actualizar stock en medicamentos
                                     connection.query(
                                         `UPDATE medicamentos
                                         SET STOCK = STOCK - ?
@@ -100,13 +100,28 @@ const registrarVenta = (req, res) => {
                                             if (err) {
                                                 return connection.rollback(() => {
                                                     res.status(500).json({
-                                                        mensaje: "No se pudo actualizar el stock",
+                                                        mensaje: "No se pudo actualizar el stock del medicamento",
                                                         error: err.message
                                                     });
                                                 });
                                             }
 
-                                            insertarDetalle(posicion + 1);
+                                            // Mantener sincronizado el registro de inventario físico
+                                            connection.query(
+                                                `UPDATE inventarios
+                                                SET CANTIDAD_TOTAL = GREATEST(0, CANTIDAD_TOTAL - ?)
+                                                WHERE MEDICAMENTO_ID = ?`,
+                                                [
+                                                    detalle.CANTIDAD,
+                                                    detalle.MEDICAMENTO_ID
+                                                ],
+                                                (errInv) => {
+                                                    if (errInv) {
+                                                        console.warn("Aviso al sincronizar inventario:", errInv.message);
+                                                    }
+                                                    insertarDetalle(posicion + 1);
+                                                }
+                                            );
                                         }
                                     );
                                 }
@@ -122,10 +137,10 @@ const registrarVenta = (req, res) => {
 
             const producto = productos[indice];
 
-            if (!producto.MEDICAMENTO_ID || !producto.CANTIDAD || producto.CANTIDAD <= 0) {
+            if (!producto.MEDICAMENTO_ID || !producto.CANTIDAD || Number(producto.CANTIDAD) <= 0) {
                 return connection.rollback(() => {
                     res.status(400).json({
-                        mensaje: "Los productos contienen datos inválidos"
+                        mensaje: "Uno o más productos contienen datos de cantidad inválidos"
                     });
                 });
             }
@@ -136,11 +151,10 @@ const registrarVenta = (req, res) => {
                 WHERE ID = ?`,
                 [producto.MEDICAMENTO_ID],
                 (err, resultados) => {
-
                     if (err) {
                         return connection.rollback(() => {
                             res.status(500).json({
-                                mensaje: "Error al consultar el medicamento",
+                                mensaje: "Error al consultar el medicamento en la base de datos",
                                 error: err.message
                             });
                         });
@@ -159,13 +173,12 @@ const registrarVenta = (req, res) => {
                     if (medicamento.STOCK < producto.CANTIDAD) {
                         return connection.rollback(() => {
                             res.status(400).json({
-                                mensaje: `Stock insuficiente para ${medicamento.NOMBRE}. Stock disponible: ${medicamento.STOCK}`
+                                mensaje: `Stock insuficiente para "${medicamento.NOMBRE}". Stock disponible: ${medicamento.STOCK}, solicitado: ${producto.CANTIDAD}`
                             });
                         });
                     }
 
                     const subtotal = Number(medicamento.PRECIO) * Number(producto.CANTIDAD);
-
                     total += subtotal;
 
                     detalles.push({
@@ -174,8 +187,6 @@ const registrarVenta = (req, res) => {
                         PRECIO_UNITARIO: Number(medicamento.PRECIO),
                         SUBTOTAL: subtotal
                     });
-
-                    detallesProcesados++;
 
                     procesarProducto(indice + 1);
                 }
@@ -195,9 +206,8 @@ const consultarVentas = (req, res) => {
             METODO_PAGO,
             CLIENTE_NOMBRE
         FROM ventas
-        ORDER BY FECHA DESC`,
+        ORDER BY FECHA DESC, CODIGO DESC`,
         (err, result) => {
-
             if (err) {
                 return res.status(500).json({
                     mensaje: "Error al consultar las ventas",
@@ -228,7 +238,6 @@ const consultarDetalleVenta = (req, res) => {
         WHERE dv.VENTA_CODIGO = ?`,
         [codigo],
         (err, result) => {
-
             if (err) {
                 return res.status(500).json({
                     mensaje: "Error al consultar el detalle de la venta",
