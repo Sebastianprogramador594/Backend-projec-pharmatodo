@@ -1,220 +1,170 @@
-const connection = require("../config/db");
+// Controlador de ventas de Pharmatodo: compatible con mysql2.createPool().
+const pool = require("../config/db");
 
-const registrarVenta = (req, res) => {
-    const {
-        CLIENTE_NOMBRE,
-        METODO_PAGO,
-        productos
-    } = req.body;
+function errorDeVenta(estado, mensaje) {
+    const error = new Error(mensaje);
+    error.estado = estado;
+    return error;
+}
 
-    if (!CLIENTE_NOMBRE || !METODO_PAGO || !Array.isArray(productos) || productos.length === 0) {
+const registrarVenta = async (req, res) => {
+    const { CLIENTE_NOMBRE, METODO_PAGO, productos } = req.body || {};
+
+    if (
+        typeof CLIENTE_NOMBRE !== "string" || !CLIENTE_NOMBRE.trim() ||
+        typeof METODO_PAGO !== "string" || !METODO_PAGO.trim() ||
+        !Array.isArray(productos) || productos.length === 0
+    ) {
         return res.status(400).json({
             mensaje: "Los datos de la venta están incompletos. Debe indicar cliente, método de pago y al menos un producto."
         });
     }
 
-    connection.beginTransaction((err) => {
-        if (err) {
-            return res.status(500).json({
-                mensaje: "No se pudo iniciar la transacción de venta",
-                error: err.message
+    // Sumar cantidades de productos repetidos para validar el stock real.
+    const cantidadesPorMedicamento = new Map();
+    for (const producto of productos) {
+        const id = Number(producto?.MEDICAMENTO_ID);
+        const cantidad = Number(producto?.CANTIDAD);
+
+        if (!Number.isSafeInteger(id) || id <= 0 ||
+            !Number.isSafeInteger(cantidad) || cantidad <= 0) {
+            return res.status(400).json({
+                mensaje: "Uno o más productos contienen datos de cantidad inválidos"
             });
         }
 
-        let total = 0;
-        const detalles = [];
+        const acumulado = (cantidadesPorMedicamento.get(id) || 0) + cantidad;
+        if (!Number.isSafeInteger(acumulado)) {
+            return res.status(400).json({ mensaje: "Cantidad solicitada inválida" });
+        }
+        cantidadesPorMedicamento.set(id, acumulado);
+    }
 
-        const procesarProducto = (indice) => {
-            if (indice >= productos.length) {
-                // Insertar encabezado de la venta
-                connection.query(
-                    `INSERT INTO ventas
-                    (TOTAL, METODO_PAGO, CLIENTE_NOMBRE)
-                    VALUES (?, ?, ?)`,
-                    [total, METODO_PAGO.trim(), CLIENTE_NOMBRE.trim()],
-                    (err, resultadoVenta) => {
-                        if (err) {
-                            return connection.rollback(() => {
-                                res.status(500).json({
-                                    mensaje: "No se pudo registrar la cabecera de la venta",
-                                    error: err.message
-                                });
-                            });
-                        }
+    let connection;
+    let transaccionIniciada = false;
 
-                        const codigoVenta = resultadoVenta.insertId;
+    try {
+        // Obtener UNA conexión del pool para toda la transacción.
+        connection = await pool.promise().getConnection();
+        await connection.beginTransaction();
+        transaccionIniciada = true;
 
-                        const insertarDetalle = (posicion) => {
-                            if (posicion >= detalles.length) {
-                                return connection.commit((err) => {
-                                    if (err) {
-                                        return connection.rollback(() => {
-                                            res.status(500).json({
-                                                mensaje: "No se pudo confirmar la transacción de venta",
-                                                error: err.message
-                                            });
-                                        });
-                                    }
+        // Bloquear filas en orden fijo para evitar ventas simultáneas sin stock.
+        const cantidades = [...cantidadesPorMedicamento.entries()]
+            .sort(([idA], [idB]) => idA - idB);
+        const medicamentos = new Map();
 
-                                    res.status(201).json({
-                                        mensaje: "Venta registrada correctamente",
-                                        codigoVenta: codigoVenta,
-                                        total: total
-                                    });
-                                });
-                            }
-
-                            const detalle = detalles[posicion];
-
-                            connection.query(
-                                `INSERT INTO detalle_ventas
-                                (VENTA_CODIGO, MEDICAMENTO_ID, CANTIDAD, PRECIO_UNITARIO, SUBTOTAL)
-                                VALUES (?, ?, ?, ?, ?)`,
-                                [
-                                    codigoVenta,
-                                    detalle.MEDICAMENTO_ID,
-                                    detalle.CANTIDAD,
-                                    detalle.PRECIO_UNITARIO,
-                                    detalle.SUBTOTAL
-                                ],
-                                (err) => {
-                                    if (err) {
-                                        return connection.rollback(() => {
-                                            res.status(500).json({
-                                                mensaje: "No se pudo registrar el detalle de la venta",
-                                                error: err.message
-                                            });
-                                        });
-                                    }
-
-                                    // Actualizar stock en medicamentos
-                                    connection.query(
-                                        `UPDATE medicamentos
-                                        SET STOCK = STOCK - ?
-                                        WHERE ID = ?`,
-                                        [
-                                            detalle.CANTIDAD,
-                                            detalle.MEDICAMENTO_ID
-                                        ],
-                                        (err) => {
-                                            if (err) {
-                                                return connection.rollback(() => {
-                                                    res.status(500).json({
-                                                        mensaje: "No se pudo actualizar el stock del medicamento",
-                                                        error: err.message
-                                                    });
-                                                });
-                                            }
-
-                                            // Mantener sincronizado el registro de inventario físico
-                                            connection.query(
-                                                `UPDATE inventarios
-                                                SET CANTIDAD_TOTAL = GREATEST(0, CANTIDAD_TOTAL - ?)
-                                                WHERE MEDICAMENTO_ID = ?`,
-                                                [
-                                                    detalle.CANTIDAD,
-                                                    detalle.MEDICAMENTO_ID
-                                                ],
-                                                (errInv) => {
-                                                    if (errInv) {
-                                                        console.warn("Aviso al sincronizar inventario:", errInv.message);
-                                                    }
-                                                    insertarDetalle(posicion + 1);
-                                                }
-                                            );
-                                        }
-                                    );
-                                }
-                            );
-                        };
-
-                        insertarDetalle(0);
-                    }
-                );
-
-                return;
-            }
-
-            const producto = productos[indice];
-
-            if (!producto.MEDICAMENTO_ID || !producto.CANTIDAD || Number(producto.CANTIDAD) <= 0) {
-                return connection.rollback(() => {
-                    res.status(400).json({
-                        mensaje: "Uno o más productos contienen datos de cantidad inválidos"
-                    });
-                });
-            }
-
-            connection.query(
+        for (const [id, cantidad] of cantidades) {
+            const [filas] = await connection.execute(
                 `SELECT ID, NOMBRE, PRECIO, STOCK
-                FROM medicamentos
-                WHERE ID = ?`,
-                [producto.MEDICAMENTO_ID],
-                (err, resultados) => {
-                    if (err) {
-                        return connection.rollback(() => {
-                            res.status(500).json({
-                                mensaje: "Error al consultar el medicamento en la base de datos",
-                                error: err.message
-                            });
-                        });
-                    }
-
-                    if (resultados.length === 0) {
-                        return connection.rollback(() => {
-                            res.status(404).json({
-                                mensaje: `El medicamento con ID ${producto.MEDICAMENTO_ID} no existe`
-                            });
-                        });
-                    }
-
-                    const medicamento = resultados[0];
-
-                    if (medicamento.STOCK < producto.CANTIDAD) {
-                        return connection.rollback(() => {
-                            res.status(400).json({
-                                mensaje: `Stock insuficiente para "${medicamento.NOMBRE}". Stock disponible: ${medicamento.STOCK}, solicitado: ${producto.CANTIDAD}`
-                            });
-                        });
-                    }
-
-                    const subtotal = Number(medicamento.PRECIO) * Number(producto.CANTIDAD);
-                    total += subtotal;
-
-                    detalles.push({
-                        MEDICAMENTO_ID: medicamento.ID,
-                        CANTIDAD: Number(producto.CANTIDAD),
-                        PRECIO_UNITARIO: Number(medicamento.PRECIO),
-                        SUBTOTAL: subtotal
-                    });
-
-                    procesarProducto(indice + 1);
-                }
+                 FROM medicamentos WHERE ID = ? FOR UPDATE`,
+                [id]
             );
-        };
 
-        procesarProducto(0);
-    });
+            if (filas.length === 0) {
+                throw errorDeVenta(404, `El medicamento con ID ${id} no existe`);
+            }
+
+            const medicamento = filas[0];
+            if (Number(medicamento.STOCK) < cantidad) {
+                throw errorDeVenta(
+                    400,
+                    `Stock insuficiente para "${medicamento.NOMBRE}". ` +
+                    `Stock disponible: ${medicamento.STOCK}, solicitado: ${cantidad}`
+                );
+            }
+            medicamentos.set(id, medicamento);
+        }
+
+        // Mantener una línea de detalle por cada producto enviado por el frontend.
+        const detalles = productos.map((producto) => {
+            const id = Number(producto.MEDICAMENTO_ID);
+            const cantidad = Number(producto.CANTIDAD);
+            const precio = Number(medicamentos.get(id).PRECIO);
+            return {
+                MEDICAMENTO_ID: id,
+                CANTIDAD: cantidad,
+                PRECIO_UNITARIO: precio,
+                SUBTOTAL: Math.round((precio * cantidad + Number.EPSILON) * 100) / 100
+            };
+        });
+
+        const total = Math.round(
+            (detalles.reduce((suma, detalle) => suma + detalle.SUBTOTAL, 0) + Number.EPSILON) * 100
+        ) / 100;
+
+        const [resultadoVenta] = await connection.execute(
+            `INSERT INTO ventas (TOTAL, METODO_PAGO, CLIENTE_NOMBRE)
+             VALUES (?, ?, ?)`,
+            [total, METODO_PAGO.trim(), CLIENTE_NOMBRE.trim()]
+        );
+        const codigoVenta = resultadoVenta.insertId;
+
+        for (const detalle of detalles) {
+            await connection.execute(
+                `INSERT INTO detalle_ventas
+                 (VENTA_CODIGO, MEDICAMENTO_ID, CANTIDAD, PRECIO_UNITARIO, SUBTOTAL)
+                 VALUES (?, ?, ?, ?, ?)`,
+                [codigoVenta, detalle.MEDICAMENTO_ID, detalle.CANTIDAD,
+                    detalle.PRECIO_UNITARIO, detalle.SUBTOTAL]
+            );
+        }
+
+        for (const [id, cantidad] of cantidades) {
+            // Descuento del stock global del medicamento.
+            await connection.execute(
+                `UPDATE medicamentos SET STOCK = STOCK - ? WHERE ID = ?`,
+                [cantidad, id]
+            );
+
+            // Mantener la misma lógica de inventario físico del controlador original.
+            // Si existen VARIAS ubicaciones por medicamento, conviene revisar esta
+            // distribución posteriormente para no restar toda la cantidad en cada una.
+            await connection.execute(
+                `UPDATE inventarios
+                 SET CANTIDAD_TOTAL = GREATEST(0, CANTIDAD_TOTAL - ?)
+                 WHERE MEDICAMENTO_ID = ?`,
+                [cantidad, id]
+            );
+        }
+
+        await connection.commit();
+        transaccionIniciada = false;
+
+        return res.status(201).json({
+            mensaje: "Venta registrada correctamente",
+            codigoVenta,
+            total
+        });
+    } catch (err) {
+        if (connection && transaccionIniciada) {
+            try {
+                await connection.rollback();
+            } catch (errorRollback) {
+                console.error("Error al revertir la venta:", errorRollback);
+            }
+        }
+        if (!err.estado) {
+            console.error("Error al registrar la venta:", err);
+        }
+        return res.status(err.estado || 500).json({
+            mensaje: err.estado ? err.message : "No se pudo registrar la venta"
+        });
+    } finally {
+        // Se ejecuta tras COMMIT, ROLLBACK o error: no agota el pool.
+        if (connection) connection.release();
+    }
 };
 
 const consultarVentas = (req, res) => {
-    connection.query(
-        `SELECT
-            CODIGO,
-            FECHA,
-            TOTAL,
-            METODO_PAGO,
-            CLIENTE_NOMBRE
-        FROM ventas
-        ORDER BY FECHA DESC, CODIGO DESC`,
+    pool.query(
+        `SELECT CODIGO, FECHA, TOTAL, METODO_PAGO, CLIENTE_NOMBRE
+         FROM ventas ORDER BY FECHA DESC, CODIGO DESC`,
         (err, result) => {
             if (err) {
-                return res.status(500).json({
-                    mensaje: "Error al consultar las ventas",
-                    error: err.message
-                });
+                console.error("Error al consultar las ventas:", err);
+                return res.status(500).json({ mensaje: "Error al consultar las ventas" });
             }
-
             res.json(result);
         }
     );
@@ -223,28 +173,19 @@ const consultarVentas = (req, res) => {
 const consultarDetalleVenta = (req, res) => {
     const codigo = req.params.codigo;
 
-    connection.query(
-        `SELECT
-            dv.ID,
-            dv.VENTA_CODIGO,
-            dv.MEDICAMENTO_ID,
-            m.NOMBRE AS MEDICAMENTO,
-            dv.CANTIDAD,
-            dv.PRECIO_UNITARIO,
-            dv.SUBTOTAL
-        FROM detalle_ventas dv
-        INNER JOIN medicamentos m
-            ON dv.MEDICAMENTO_ID = m.ID
-        WHERE dv.VENTA_CODIGO = ?`,
+    pool.query(
+        `SELECT dv.ID, dv.VENTA_CODIGO, dv.MEDICAMENTO_ID,
+                m.NOMBRE AS MEDICAMENTO, dv.CANTIDAD,
+                dv.PRECIO_UNITARIO, dv.SUBTOTAL
+         FROM detalle_ventas dv
+         INNER JOIN medicamentos m ON dv.MEDICAMENTO_ID = m.ID
+         WHERE dv.VENTA_CODIGO = ?`,
         [codigo],
         (err, result) => {
             if (err) {
-                return res.status(500).json({
-                    mensaje: "Error al consultar el detalle de la venta",
-                    error: err.message
-                });
+                console.error("Error al consultar el detalle de la venta:", err);
+                return res.status(500).json({ mensaje: "Error al consultar el detalle de la venta" });
             }
-
             res.json(result);
         }
     );

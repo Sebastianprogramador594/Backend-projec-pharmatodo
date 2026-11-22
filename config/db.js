@@ -1,24 +1,38 @@
+
 require("dotenv").config();
 
 const mysql = require("mysql2");
 
-const connection = mysql.createConnection({
+const pool = mysql.createPool({
     host: process.env.DB_HOST || "localhost",
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "",
     database: process.env.DB_NAME || "pharmatodo",
-    port: process.env.DB_PORT || 3306
+    port: Number(process.env.DB_PORT) || 3306,
+
+    waitForConnections: true,
+    connectionLimit: 10,
+    maxIdle: 10,
+    idleTimeout: 60000,
+    queueLimit: 0,
+
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
 });
 
-connection.connect((err) => {
+// Comprobar la conexión inicial
+pool.getConnection((err, connection) => {
     if (err) {
         console.error("❌ Error al conectar con MySQL:");
-        console.error(`   Código: ${err.code} | Mensaje: ${err.message}`);
-        console.error("💡 Sugerencia: Asegúrate de que MySQL esté activo (en XAMPP, WAMP o servicio local) y que hayas ejecutado el script database.sql.");
+        console.error(`Código: ${err.code}`);
+        console.error(`Mensaje: ${err.message}`);
         return;
     }
 
-    console.log("✅ Conectado exitosamente a la base de datos MySQL (pharmatodo)");
+    console.log("✅ Conectado exitosamente a MySQL mediante pool");
+
+    // Devolver la conexión al pool
+    connection.release();
 });
 
-module.exports = connection;
+module.exports = pool;
